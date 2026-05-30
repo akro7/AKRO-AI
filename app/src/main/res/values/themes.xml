@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <style name="Theme.IRazorAI" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="colorPrimary">@color/akro_blue</item>
+        <item name="colorPrimaryVariant">@color/akro_blue_dark</item>
+        <item name="colorOnPrimary">@color/white</item>
+        <item name="colorSecondary">@color/akro_gold</item>
+        <item name="colorOnSecondary">@color/white</item>
+        <item name="android:windowBackground">@color/akro_bg</item>
+        <item name="android:statusBarColor">@color/akro_bg</item>
+        <item name="android:navigationBarColor">@color/akro_bg</item>
+        <item name="android:windowLightStatusBar">false</item>
+    </style>
+
+    <style name="Theme.IRazorAI.Transparent" parent="Theme.IRazorAI">
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+        <item name="android:backgroundDimEnabled">false</item>
+    </style>
+
+</resources>

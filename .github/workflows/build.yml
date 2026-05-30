@@ -1,0 +1,201 @@
+name: AKRO AI Build
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build APK
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: gradle
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install SDK components
+        run: |
+          yes | sdkmanager --licenses > /dev/null 2>&1 || true
+          sdkmanager \
+            "ndk;26.1.10909125" \
+            "build-tools;36.0.0" \
+            "platforms;android-36" \
+            "cmake;3.22.1"
+
+      - name: Create local.properties
+        run: |
+          echo "sdk.dir=$ANDROID_HOME" > local.properties
+          # cmake.dir must point to the cmake installation ROOT (not bin/)
+          # AGP's CmakeLocator reads cmake-config.json from this root directory
+          CMAKE_ROOT="$ANDROID_HOME/cmake/3.22.1"
+          if [ -d "$CMAKE_ROOT" ] && [ -f "$CMAKE_ROOT/bin/cmake" ]; then
+            echo "cmake.dir=$CMAKE_ROOT" >> local.properties
+            echo "✅ cmake.dir set to: $CMAKE_ROOT"
+          else
+            # Fallback: walk up two levels from the cmake binary
+            CMAKE_BIN=$(find "$ANDROID_HOME/cmake" -name "cmake" -type f \
+              | grep -v "/4\." | sort -V | tail -1)
+            if [ -n "$CMAKE_BIN" ]; then
+              ROOT=$(cd "$(dirname "$CMAKE_BIN")/.." && pwd)
+              echo "cmake.dir=$ROOT" >> local.properties
+              echo "✅ cmake.dir fallback: $ROOT"
+            else
+              echo "⚠️ No suitable CMake found"
+            fi
+          fi
+          echo "--- local.properties ---"
+          cat local.properties
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: ${{ runner.os }}-gradle-
+
+      - name: Build Debug APK
+        run: ./gradlew assembleDebug --stacktrace 2>&1 | tee build_debug.txt; exit ${PIPESTATUS[0]}
+
+      - name: Build Release APK
+        run: ./gradlew assembleRelease --stacktrace 2>&1 | tee build_release.txt; exit ${PIPESTATUS[0]}
+
+      - name: Generate Failure Report
+        if: failure()
+        run: |
+          python3 << 'PYEOF'
+          import re
+          from datetime import datetime
+
+          def read(p):
+              try:
+                  with open(p, 'r', errors='ignore') as f: return f.read()
+              except: return ""
+
+          build_log = read("build_debug.txt") + "\n" + read("build_release.txt")
+          now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+          lines = build_log.split('\n')
+
+          error_keywords = ['error:', 'FAILED', 'Exception', 'Could not',
+                            'Caused by:', 'BUILD FAILED', 'Unresolved reference',
+                            'not found', 'cannot find symbol']
+          errors = []
+          for i, line in enumerate(lines):
+              if any(k in line for k in error_keywords):
+                  block = '\n'.join(lines[max(0,i-2):min(len(lines),i+8)])
+                  if block not in errors: errors.append(block)
+
+          kotlin_errors = re.findall(r'(e: .+\.kt:\(\d+,\d+\): .+)', build_log)
+          cmake_errors  = re.findall(r'(CMake Error.+)', build_log)
+          failed_tasks  = re.findall(r'> Task (.+?) FAILED', build_log)
+
+          report = ["="*70, "  AKRO AI BUILD FAILURE REPORT", f"  Date: {now}",
+                    "  Package: com.akro.ai | compileSdk 36 | minSdk 26",
+                    "  NDK: 26.1.10909125 | CMake: 3.22.1", "="*70]
+          report += ["\n[ FAILED TASKS ]", "-"*70]
+          report += [f"  x {t}" for t in set(failed_tasks)] or ["  None found"]
+          report += ["\n[ KOTLIN ERRORS ]", "-"*70]
+          report += [f"  {e.strip()}" for e in kotlin_errors[:30]] or ["  None found"]
+          report += ["\n[ CMAKE ERRORS ]", "-"*70]
+          report += [f"  {e.strip()}" for e in cmake_errors[:20]] or ["  None found"]
+          report += ["\n[ ERROR BLOCKS ]", "-"*70]
+          for i, e in enumerate(errors[:20], 1):
+              report += [f"\n--- #{i} ---", e]
+          report += ["\n[ FULL LOG ]", "-"*70, build_log]
+
+          text = '\n'.join(report)
+          with open("BUILD_FAILURE_REPORT.txt", 'w') as f: f.write(text)
+          print(text[:3000])
+          PYEOF
+
+      - name: Upload Failure Report
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: BUILD-FAILURE-REPORT-${{ github.run_number }}
+          path: BUILD_FAILURE_REPORT.txt
+          retention-days: 30
+
+      - name: Sign Release APK
+        if: success() && env.KEYSTORE_BASE64 != ''
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
+        run: |
+          echo "$KEYSTORE_BASE64" | base64 --decode > release.jks
+          BUILD_TOOLS="$ANDROID_HOME/build-tools/36.0.0"
+          $BUILD_TOOLS/apksigner sign \
+            --ks release.jks \
+            --ks-key-alias "$KEY_ALIAS" \
+            --ks-pass pass:"$STORE_PASSWORD" \
+            --key-pass pass:"$KEY_PASSWORD" \
+            --out app/build/outputs/apk/release/app-release-signed.apk \
+            app/build/outputs/apk/release/app-release-unsigned.apk
+          rm -f release.jks
+
+      - name: Get version info
+        if: success()
+        id: version
+        run: |
+          VERSION=$(grep "versionName" app/build.gradle | sed "s/.*versionName\s*['\"]\\([^'\"]*\\)['\"].*/\1/" | head -1)
+          CODE=$(grep "versionCode" app/build.gradle | awk '{print $2}' | head -1)
+          [ -z "$VERSION" ] && VERSION="6.0"
+          [ -z "$CODE" ] && CODE="2"
+          echo "version_name=${VERSION}" >> $GITHUB_OUTPUT
+          echo "version_code=${CODE}" >> $GITHUB_OUTPUT
+          echo "build_date=$(date +'%Y-%m-%d')" >> $GITHUB_OUTPUT
+
+      - name: Upload Debug APK
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: AKRO-AI-Debug-v${{ steps.version.outputs.version_name }}-${{ steps.version.outputs.build_date }}
+          path: app/build/outputs/apk/debug/*.apk
+          retention-days: 7
+
+      - name: Upload Release APK
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: AKRO-AI-Release-v${{ steps.version.outputs.version_name }}-${{ steps.version.outputs.build_date }}
+          path: |
+            app/build/outputs/apk/release/*-unsigned.apk
+            app/build/outputs/apk/release/*-signed.apk
+          retention-days: 30
+
+      - name: Create GitHub Release
+        if: success() && startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: AKRO AI v${{ steps.version.outputs.version_name }}
+          body: |
+            ## AKRO AI v${{ steps.version.outputs.version_name }}
+            - **Build:** ${{ steps.version.outputs.version_code }}
+            - **Date:** ${{ steps.version.outputs.build_date }}
+            - **SDK:** compileSdk 36 | minSdk 26 | targetSdk 36
+            - **NDK:** 26.1.10909125 | **BuildTools:** 36.0.0 | **CMake:** 3.22.1
+            - **ABI:** arm64-v8a, armeabi-v7a
+          files: |
+            app/build/outputs/apk/debug/*.apk
+            app/build/outputs/apk/release/*.apk
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

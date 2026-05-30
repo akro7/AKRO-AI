@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Background: deep dark with warm black tones -->
+    <color name="akro_bg">#0D0608</color>
+    <color name="akro_surface">#1A0A0D</color>
+
+    <!-- Primary: Crimson Red -->
+    <color name="akro_blue">#FF2D55</color>
+    <color name="akro_blue_dark">#C0112B</color>
+
+    <!-- Accent: Warm Gold -->
+    <color name="akro_gold">#FFB300</color>
+    <color name="akro_gold_dark">#E65100</color>
+
+    <!-- Text -->
+    <color name="akro_text">#F5E6E8</color>
+    <color name="akro_subtext">#B08090</color>
+
+    <!-- Misc -->
+    <color name="white">#FFFFFF</color>
+    <color name="black">#000000</color>
+
+    <!-- Gradient support -->
+    <color name="akro_gradient_start">#1A0508</color>
+    <color name="akro_gradient_end">#0D0608</color>
+    <color name="akro_glow_red">#80FF2D55</color>
+    <color name="akro_glow_gold">#60FFB300</color>
+</resources>
